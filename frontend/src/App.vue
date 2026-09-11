@@ -40,7 +40,10 @@
       </div>
       <div class="lg:w-3/5 space-y-4">
         <div v-if="store.parsed" class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-          <h3 class="text-sm font-bold text-slate-400 mb-3">查询解析结果</h3>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-slate-400">查询解析结果</h3>
+            <button @click="store.exportSummary" class="text-xs px-3 py-1 bg-cyan-600 hover:bg-cyan-500 rounded font-bold text-white">导出摘要</button>
+          </div>
           <div class="grid grid-cols-4 gap-3 text-sm mb-4">
             <div class="bg-slate-900 rounded p-2 text-center"><div class="text-xs text-slate-500 mb-1">类型</div><div class="text-cyan-400 font-bold">{{ store.parsed.type }}</div></div>
             <div class="bg-slate-900 rounded p-2 text-center"><div class="text-xs text-slate-500 mb-1">复杂度</div><div class="font-bold" :class="store.complexityLabel.color">{{ store.complexityLabel.label }}</div></div>

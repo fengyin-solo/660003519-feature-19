@@ -57,12 +57,12 @@ function parseSQL(sql: string): ParsedQuery {
   const up = sql.toUpperCase().trim()
   const type = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE'].find(t => up.startsWith(t)) as ParsedQuery['type'] || 'UNKNOWN'
   const tables = Array.from(sql.matchAll(/(?:FROM|JOIN|INTO|UPDATE)\s+([a-zA-Z_]\w*)/gi)).map(m => m[1].toLowerCase())
-  const columns = type === 'SELECT' ? Array.from(sql.matchAll(/SELECT\s+([\s\S]*?)\s+FROM/i)[0]?.[1]?.split(',').map(s => s.trim()) || []) : []
-  const joins = Array.from(sql.matchAll(/(LEFT|RIGHT|INNER|OUTER|CROSS|FULL)?\s*JOIN\s+([a-zA-Z_]\w*)\s+ON\s+([^JOIN|WHERE|GROUP|ORDER|LIMIT]+)/gi)).map(m => ({ type: (m[1] || 'INNER').trim(), table: m[2], condition: m[3].trim() }))
+  const columns = type === 'SELECT' ? (sql.match(/SELECT\s+([\s\S]*?)\s+FROM/i)?.[1]?.split(',').map(s => s.trim()) || []) : []
+  const joins = Array.from(sql.matchAll(/(LEFT|RIGHT|INNER|OUTER|CROSS|FULL)?\s*JOIN\s+([a-zA-Z_]\w*)(?:\s+(?:AS\s+)?[a-zA-Z_]\w*)?\s+ON\s+([\s\S]+?)(?=\s*(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL)?\s*JOIN|\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|$)/gi)).map(m => ({ type: (m[1] || 'INNER').trim(), table: m[2], condition: m[3].trim() }))
   const whereMatch = sql.match(/WHERE\s+([\s\S]*?)(?:GROUP|ORDER|LIMIT|$)/i)
   const whereConditions = whereMatch ? whereMatch[1].split(/\s+AND\s+|\s+OR\s+/i).map(s => s.trim()).filter(Boolean) : []
-  const orderBy = Array.from(sql.matchAll(/ORDER\s+BY\s+([\s\S]*?)(?:LIMIT|$)/i)[0]?.[1]?.split(',').map(s => s.trim()) || [])
-  const groupBy = Array.from(sql.matchAll(/GROUP\s+BY\s+([\s\S]*?)(?:HAVING|ORDER|LIMIT|$)/i)[0]?.[1]?.split(',').map(s => s.trim()) || [])
+  const orderBy = sql.match(/ORDER\s+BY\s+([\s\S]*?)(?:LIMIT|$)/i)?.[1]?.split(',').map(s => s.trim()) || []
+  const groupBy = sql.match(/GROUP\s+BY\s+([\s\S]*?)(?:HAVING|ORDER|LIMIT|$)/i)?.[1]?.split(',').map(s => s.trim()) || []
   const limitMatch = sql.match(/LIMIT\s+(\d+)/i)
   const limit = limitMatch ? parseInt(limitMatch[1]) : undefined
 
@@ -73,7 +73,7 @@ function parseSQL(sql: string): ParsedQuery {
   if (joins.length > 3) suggestions.push('连接表过多（>3），考虑分解查询')
   if (!whereConditions.length && type === 'SELECT') suggestions.push('无 WHERE 条件，将扫描全表')
   if (sql.includes('SELECT *')) suggestions.push('避免 SELECT *，明确指定列名')
-  if (sql.toUpperCase().includes('LIKE '%')) suggestions.push('前缀通配符 LIKE '%...' 无法使用索引')
+  if (sql.toUpperCase().includes("LIKE '%")) suggestions.push("前缀通配符 LIKE '%...' 无法使用索引")
   if (!limit && type === 'SELECT') suggestions.push('建议添加 LIMIT 限制结果集大小')
 
   return { type, tables, columns, joins, whereConditions, orderBy, groupBy, limit, complexity, suggestions, estimatedCost: Math.round(estimatedCost) }
@@ -94,25 +94,25 @@ function buildPlan(parsed: ParsedQuery): QueryPlan {
 }
 
 export const SQL_TEMPLATES = [
-  { name: '基础查询', sql: 'SELECT id, username, email
+  { name: '基础查询', sql: `SELECT id, username, email
 FROM users
 WHERE status = 'active'
-LIMIT 100;' },
-  { name: '多表JOIN', sql: 'SELECT u.username, o.id AS order_id, p.name AS product, o.amount
+LIMIT 100;` },
+  { name: '多表JOIN', sql: `SELECT u.username, o.id AS order_id, p.name AS product, o.amount
 FROM users u
 INNER JOIN orders o ON u.id = o.user_id
 INNER JOIN products p ON o.product_id = p.id
 WHERE o.status = 'completed'
 ORDER BY o.created_at DESC
-LIMIT 50;' },
-  { name: '聚合分析', sql: 'SELECT c.name AS category, COUNT(o.id) AS order_count, SUM(o.amount) AS revenue, AVG(o.amount) AS avg_amount
+LIMIT 50;` },
+  { name: '聚合分析', sql: `SELECT c.name AS category, COUNT(o.id) AS order_count, SUM(o.amount) AS revenue, AVG(o.amount) AS avg_amount
 FROM categories c
 LEFT JOIN products p ON c.id = p.category_id
 LEFT JOIN orders o ON p.id = o.product_id
 GROUP BY c.id, c.name
 HAVING COUNT(o.id) > 10
-ORDER BY revenue DESC;' },
-  { name: '子查询', sql: 'SELECT username, email
+ORDER BY revenue DESC;` },
+  { name: '子查询', sql: `SELECT username, email
 FROM users
 WHERE id IN (
   SELECT DISTINCT user_id
@@ -120,13 +120,23 @@ WHERE id IN (
   WHERE amount > 1000
   AND created_at >= '2024-01-01'
 )
-ORDER BY username;' },
-  { name: '全表扫描', sql: 'SELECT *
+ORDER BY username;` },
+  { name: '全表扫描', sql: `SELECT *
 FROM orders
-WHERE YEAR(created_at) = 2024;' },
+WHERE YEAR(created_at) = 2024;` },
 ]
 
 export const SCHEMA_TABLES = SCHEMA
+
+// 将执行计划树渲染为与页面 PlanNode 组件一致的文本树
+function planToText(node: QueryPlan, depth = 0): string[] {
+  const indent = '  '.repeat(depth).replace(/\s\s/g, '│ ').replace(/│ $/, '└─')
+  let line = indent + node.operation
+  if (node.table) line += ` on ${node.table}`
+  if (node.index) line += ` [${node.index}]`
+  line += ` cost=${node.cost.toFixed(1)} rows=${node.rows}`
+  return [line, ...node.children.flatMap(c => planToText(c, depth + 1))]
+}
 
 export const useSQLStore = defineStore('sql', () => {
   const sql = ref(SQL_TEMPLATES[0].sql)
@@ -147,5 +157,70 @@ export const useSQLStore = defineStore('sql', () => {
     return { label: '非常复杂', color: 'text-red-400' }
   })
 
-  return { sql, parsed, plan, activeSchema, complexityLabel, analyze }
+  // 生成与页面展示内容一致的 Markdown 摘要
+  function buildSummary(): string {
+    const p = parsed.value
+    if (!p) return ''
+    const lines: string[] = []
+    lines.push('# SQL 查询分析报告')
+    lines.push('')
+    lines.push(`生成时间：${new Date().toLocaleString()}`)
+    lines.push('')
+    lines.push('## SQL 语句')
+    lines.push('')
+    lines.push('```sql')
+    lines.push(sql.value.trim())
+    lines.push('```')
+    lines.push('')
+    lines.push('## 查询解析结果')
+    lines.push('')
+    lines.push(`- 类型：${p.type}`)
+    lines.push(`- 复杂度：${complexityLabel.value.label}`)
+    lines.push(`- JOIN数：${p.joins.length}`)
+    lines.push(`- 预估行数：${p.estimatedCost}`)
+    lines.push('')
+    lines.push('## 优化建议')
+    lines.push('')
+    if (p.suggestions.length) {
+      p.suggestions.forEach(s => lines.push(`- ⚠ ${s}`))
+    } else {
+      lines.push('✓ 未发现明显性能问题')
+    }
+    if (plan.value) {
+      lines.push('')
+      lines.push('## 执行计划树')
+      lines.push('')
+      lines.push('```')
+      lines.push(...planToText(plan.value))
+      lines.push('```')
+    }
+    lines.push('')
+    lines.push('## 涉及表与关联关系')
+    lines.push('')
+    p.tables.forEach(t => {
+      const schema = SCHEMA.find(s => s.name === t)
+      lines.push(`- ${t}${schema ? `（${schema.rowCount.toLocaleString()} 行）` : ''}`)
+    })
+    if (p.joins.length) {
+      lines.push('')
+      lines.push('关联关系：')
+      p.joins.forEach(j => lines.push(`- ${j.type} JOIN ${j.table} ON ${j.condition}`))
+    }
+    lines.push('')
+    return lines.join('\n')
+  }
+
+  function exportSummary() {
+    const summary = buildSummary()
+    if (!summary) return
+    const blob = new Blob([summary], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sql-analysis-${Date.now()}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return { sql, parsed, plan, activeSchema, complexityLabel, analyze, buildSummary, exportSummary }
 })
